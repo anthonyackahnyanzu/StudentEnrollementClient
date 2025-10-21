@@ -34,8 +34,10 @@
 
 ---
 
+
 ## Setting Up React with TypeScript
 
+### Option 1: Create React App
 1. **Install Node.js**
    - Download and install Node.js from [nodejs.org](https://nodejs.org/).
 
@@ -59,6 +61,40 @@
    - Your app will open in the browser.
 
 5. **Edit TypeScript Files**
+   - Write your React code in `.tsx` files inside the `src` folder.
+
+---
+
+### Option 2: Vite (Recommended for Fast Development)
+1. **Install Node.js**
+   - Download and install Node.js from [nodejs.org](https://nodejs.org/).
+
+2. **Create a Vite React Project with TypeScript**
+   - Run:
+     ```shell
+     npm create vite@latest my-vite-app -- --template react-ts
+     ```
+
+3. **Navigate to Your App Folder**
+   - Run:
+     ```shell
+     cd my-vite-app
+     ```
+
+4. **Install Dependencies**
+   - Run:
+     ```shell
+     npm install
+     ```
+
+5. **Start the Development Server**
+   - Run:
+     ```shell
+     npm run dev
+     ```
+   - Your app will open in the browser, usually at http://localhost:5173
+
+6. **Edit TypeScript Files**
    - Write your React code in `.tsx` files inside the `src` folder.
 
 ---

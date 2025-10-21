@@ -1,4 +1,4 @@
-# React Toolkit Overview
+# Redux Toolkit Overview
 
 ---
 
