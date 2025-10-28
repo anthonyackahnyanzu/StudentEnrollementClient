@@ -34,6 +34,144 @@ By the end of this session, students should be able to:
 - **SOLID principles**: Keep components focused and replaceable.
 - **Configuration and logging**: Avoid magic values and invisible errors.
 
+### ⚙️ Configuration and logging (Extra credit)
+
+This is a potential extra-credit opportunity: add proper **configuration** and **structured logging** to your project and demonstrate how they improve observability, maintainability, and debugging for long-running or distributed systems.
+
+What to implement (suggested minimum):
+- Centralized configuration using appsettings.json and the Options pattern (`IOptions<T>`).
+- Environment-specific overrides (e.g. `appsettings.Development.json`) and sensitive values in user secrets / environment variables.
+- Add logging to critical flows (enrollment, background job queueing, job processing, error paths).
+- Integrate Serilog as the structured logging provider and configure at least one sink (console + file or Seq/Elastic).
+
+Short contract (inputs/outputs, success criteria):
+- Inputs: existing .NET Web API project (Program.cs), `appsettings.json`.
+- Outputs: updated Program.cs wiring, an `appsettings.json` sample, and sample service/controller usage showing logs and bound configuration.
+- Success: application logs meaningful structured events (with properties) and configuration values are bound to POCOs and respect environment overrides.
+
+Why this matters
+- Configuration separates code from environment-specific values and credentials. Tests and deployments are easier when you centralize configuration.
+- Structured logging (JSON + named properties) makes it simple to query logs, correlate events across services, and power dashboards/alerts.
+
+Quick .NET Core examples
+
+1) appsettings.json (snippet)
+
+```json
+{
+    "Logging": {
+        "LogLevel": {
+            "Default": "Information",
+            "Microsoft": "Warning"
+        }
+    },
+    "ConnectionStrings": {
+        "Default": "Server=...;Database=...;User Id=...;Password=..."
+    },
+    "Serilog": {
+        "Using": [],
+        "MinimumLevel": "Information",
+        "WriteTo": [
+            { "Name": "Console" },
+            { "Name": "File", "Args": { "path": "Logs/log-.txt", "rollingInterval": "Day" } }
+        ],
+        "Enrich": [ "FromLogContext", "WithMachineName", "WithProcessId" ]
+    }
+}
+```
+
+2) Program.cs (minimal host) — Microsoft.Extensions.Logging + Serilog integration
+
+```csharp
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Read Serilog configuration from appsettings
+Log.Logger = new LoggerConfiguration()
+        .ReadFrom.Configuration(builder.Configuration)
+        .Enrich.FromLogContext()
+        .CreateLogger();
+
+builder.Host.UseSerilog();
+
+// Configure services and options
+builder.Services.Configure<MyOptions>(builder.Configuration.GetSection("MyOptions"));
+
+var app = builder.Build();
+
+app.MapGet("/", (ILogger<Program> logger) =>
+{
+        logger.LogInformation("Hello world endpoint hit at {Time}", DateTime.UtcNow);
+        return Results.Ok("ok");
+});
+
+app.Run();
+```
+
+3) Using ILogger in a service (structured logging)
+
+```csharp
+public class EnrollmentService
+{
+        private readonly ILogger<EnrollmentService> _logger;
+
+        public EnrollmentService(ILogger<EnrollmentService> logger)
+        {
+                _logger = logger;
+        }
+
+        public Task EnrollStudentAsync(int studentId, CancellationToken ct)
+        {
+                _logger.LogInformation("Starting enrollment for {StudentId}", studentId);
+                try
+                {
+                        // ... enrollment logic
+                        _logger.LogInformation("Enrollment succeeded for {StudentId}", studentId);
+                }
+                catch (Exception ex)
+                {
+                        _logger.LogError(ex, "Enrollment failed for {StudentId}", studentId);
+                        throw;
+                }
+
+                return Task.CompletedTask;
+        }
+}
+```
+
+Microsoft.Extensions.Logging — quick summary
+- Built into ASP.NET Core and the Generic Host.
+- Provides ILogger<T>, log levels, and a provider model. Providers (Console, Debug, EventSource, EventLog) write to different targets.
+- Good for standard, lightweight logging with dependency injection and filtering by category/level.
+
+Serilog — quick summary and sinks
+- Serilog is a popular structured-logging library that integrates well with .NET through `Serilog.AspNetCore` and the `UseSerilog()` host hook.
+- Sinks: output targets for logs. Popular sinks include:
+    - Console (human-friendly or JSON)
+    - File / Rolling file
+    - Seq (http://datalust.co/seq) — great for local structured log exploration
+    - Elasticsearch (for ELK stacks)
+    - Application Insights
+    - Datadog, Splunk, SQL, Kafka, many community sinks
+- Advantages of Serilog for structured logging:
+    - Structured events: log properties (e.g. {StudentId}, {RequestId}) are emitted as typed fields, not just string text — this enables rich queries and dashboards.
+    - Wide ecosystem of sinks and enrichers (machine name, process id, thread id, correlation ids).
+    - Flexible configuration: read from appsettings.json, enrichers, filters, and per-sink level overrides.
+    - Efficient and safe handling of destructuring complex objects.
+
+Extra-credit ideas for the assignment
+- Add Serilog and one additional sink (File + Seq or File + Elasticsearch). Demonstrate searching and filtering logs by StudentId or JobId.
+- Add configuration binding for a feature toggle or an external API client and show environment overrides.
+- Add correlation ids for background jobs and show how to propagate them into log context for traceability.
+
+Notes and best practices
+- Avoid logging secrets — use configuration and secret stores for credentials.
+- Use structured properties, not string concatenation, to ensure logs are machine-parseable.
+- Ensure logs from background workers include enough context (job id, user id, attempt number) to diagnose failures.
+- Consider log retention and cost when writing to cloud sinks.
+
+
 ### 💬 Discussion Prompt
 
 > In your projects, where does complexity usually appear first — business logic, data access, or async flow?
@@ -247,12 +385,7 @@ public class SendWelcomeEmailHandler : INotificationHandler<StudentRegisteredEve
 
 ## 🧪 Project Idea: Async Analysis Tool
 
-Build a small system that:
-
-- Reads input asynchronously (files, APIs, or events).
-- Queues long-running jobs.
-- Monitors progress via dashboard or logs.
-- Sends a completion notification.
+you can expand some of these ideas into your project.
 
 **Possible Stack:**  
 - Backend: .NET 8 Web API + BackgroundService  
