@@ -69,12 +69,17 @@ Why use window functions?
 - Top-N per group (e.g., top students per course) without subqueries
 - Compare current row to previous/next row (detect changes)
 
-Below is a small, easy dataset you can paste into a SQL sandbox to visualize behavior and run sample queries.
+Below is a small, easy dataset you can paste into a SQL sandbox to visualize behavior and run sample queries.  We'll extend this dataset and add a `#Students` table so you can join names and practice joins + windowing.
 
-Sample data (StudentGrades):
+Sample data (StudentGrades + Students):
 
 ```sql
--- Create sample table
+-- Create sample tables
+CREATE TABLE #Students (
+    StudentID INT PRIMARY KEY,
+    StudentName VARCHAR(100)
+);
+
 CREATE TABLE #StudentGrades (
     StudentID INT,
     CourseTakenDate DATE,
@@ -82,133 +87,121 @@ CREATE TABLE #StudentGrades (
     Grade INT
 );
 
--- Insert sample rows
+-- Insert students
+INSERT INTO #Students (StudentID, StudentName) VALUES
+(1, 'Ada Lovelace'),
+(2, 'Alan Turing'),
+(3, 'Grace Hopper'),
+(4, 'Katherine Johnson');
+
+-- Insert sample grades (extended)
 INSERT INTO #StudentGrades (StudentID, CourseTakenDate, CourseName, Grade) VALUES
 (1, '2025-01-10', 'Math', 70),
 (1, '2025-02-12', 'Science', 85),
 (1, '2025-03-05', 'History', 78),
+(1, '2025-04-10', 'Math', 82),
 (2, '2025-01-15', 'Math', 88),
 (2, '2025-02-20', 'Science', 92),
-(2, '2025-03-22', 'History', 75);
+(2, '2025-03-22', 'History', 75),
+(3, '2025-01-08', 'Math', 95),
+(3, '2025-02-14', 'Science', 90),
+(3, '2025-03-30', 'History', 93),
+(4, '2025-02-01', 'Math', 60),
+(4, '2025-03-01', 'Science', 65);
 
-SELECT * FROM #StudentGrades ORDER BY StudentID, CourseTakenDate;
+SELECT s.StudentID, s.StudentName, g.CourseTakenDate, g.CourseName, g.Grade
+FROM #StudentGrades g
+JOIN #Students s ON s.StudentID = g.StudentID
+ORDER BY s.StudentID, g.CourseTakenDate;
 ```
 
-The table looks like:
+The extended table looks like (ordered):
 
-| StudentID | CourseTakenDate | CourseName | Grade |
-|-----------:|:---------------:|:-----------|------:|
-| 1 | 2025-01-10 | Math    | 70
-| 1 | 2025-02-12 | Science | 85
-| 1 | 2025-03-05 | History | 78
-| 2 | 2025-01-15 | Math    | 88
-| 2 | 2025-02-20 | Science | 92
-| 2 | 2025-03-22 | History | 75
+| StudentID | StudentName | CourseTakenDate | CourseName | Grade |
+|----------:|:------------|:---------------:|:-----------|------:|
+| 1 | Ada Lovelace | 2025-01-10 | Math    | 70
+| 1 | Ada Lovelace | 2025-02-12 | Science | 85
+| 1 | Ada Lovelace | 2025-03-05 | History | 78
+| 1 | Ada Lovelace | 2025-04-10 | Math    | 82
+| 2 | Alan Turing  | 2025-01-15 | Math    | 88
+| 2 | Alan Turing  | 2025-02-20 | Science | 92
+| 2 | Alan Turing  | 2025-03-22 | History | 75
+| 3 | Grace Hopper | 2025-01-08 | Math    | 95
+| 3 | Grace Hopper | 2025-02-14 | Science | 90
+| 3 | Grace Hopper | 2025-03-30 | History | 93
+| 4 | Katherine Johnson | 2025-02-01 | Math | 60
+| 4 | Katherine Johnson | 2025-03-01 | Science | 65
 
-Example 1 — ROW_NUMBER(): order rows per student
+Example 1 — ROW_NUMBER() with student names
 
 ```sql
 SELECT
-    StudentID,
-    CourseTakenDate,
-    CourseName,
-    Grade,
-    ROW_NUMBER() OVER (PARTITION BY StudentID ORDER BY CourseTakenDate) AS RowNum
-FROM #StudentGrades
-ORDER BY StudentID, RowNum;
+    s.StudentName,
+    g.CourseTakenDate,
+    g.CourseName,
+    g.Grade,
+    ROW_NUMBER() OVER (PARTITION BY g.StudentID ORDER BY g.CourseTakenDate) AS RowNum
+FROM #StudentGrades g
+JOIN #Students s ON s.StudentID = g.StudentID
+ORDER BY s.StudentName, RowNum;
 ```
 
-Result:
-
-| StudentID | CourseTakenDate | CourseName | Grade | RowNum |
-|-----------:|:---------------:|:-----------|------:|-------:|
-| 1 | 2025-01-10 | Math    | 70 | 1
-| 1 | 2025-02-12 | Science | 85 | 2
-| 1 | 2025-03-05 | History | 78 | 3
-| 2 | 2025-01-15 | Math    | 88 | 1
-| 2 | 2025-02-20 | Science | 92 | 2
-| 2 | 2025-03-22 | History | 75 | 3
-
-Example 2 — Cumulative sum (running total) per student
+Example 2 — 3-period moving average (rolling) per student
 
 ```sql
 SELECT
-    StudentID,
-    CourseTakenDate,
-    Grade,
-    SUM(Grade) OVER (PARTITION BY StudentID ORDER BY CourseTakenDate ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS CumulativeGrade
-FROM #StudentGrades
-ORDER BY StudentID, CourseTakenDate;
+    s.StudentName,
+    g.CourseTakenDate,
+    g.Grade,
+    AVG(g.Grade) OVER (PARTITION BY g.StudentID ORDER BY g.CourseTakenDate ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS RollingAvg3
+FROM #StudentGrades g
+JOIN #Students s ON s.StudentID = g.StudentID
+ORDER BY s.StudentID, g.CourseTakenDate;
 ```
 
-Result:
-
-| StudentID | CourseTakenDate | Grade | CumulativeGrade |
-|-----------:|:---------------:|------:|----------------:|
-| 1 | 2025-01-10 | 70 | 70
-| 1 | 2025-02-12 | 85 | 155
-| 1 | 2025-03-05 | 78 | 233
-| 2 | 2025-01-15 | 88 | 88
-| 2 | 2025-02-20 | 92 | 180
-| 2 | 2025-03-22 | 75 | 255
-
-Example 3 — LAG() to see previous grade and detect improvement
+Example 3 — Detect improvement streaks (improved over previous course)
 
 ```sql
 SELECT
-    StudentID,
-    CourseTakenDate,
-    Grade,
-    LAG(Grade) OVER (PARTITION BY StudentID ORDER BY CourseTakenDate) AS PrevGrade,
-    CASE WHEN Grade > LAG(Grade) OVER (PARTITION BY StudentID ORDER BY CourseTakenDate) THEN 1 ELSE 0 END AS Improved
-FROM #StudentGrades
-ORDER BY StudentID, CourseTakenDate;
+    s.StudentName,
+    g.CourseTakenDate,
+    g.Grade,
+    LAG(g.Grade) OVER (PARTITION BY g.StudentID ORDER BY g.CourseTakenDate) AS PrevGrade,
+    CASE WHEN g.Grade > LAG(g.Grade) OVER (PARTITION BY g.StudentID ORDER BY g.CourseTakenDate) THEN 1 ELSE 0 END AS Improved
+FROM #StudentGrades g
+JOIN #Students s ON s.StudentID = g.StudentID
+ORDER BY s.StudentID, g.CourseTakenDate;
 ```
 
-Result:
-
-| StudentID | CourseTakenDate | Grade | PrevGrade | Improved |
-|-----------:|:---------------:|------:|----------:|---------:|
-| 1 | 2025-01-10 | 70 | NULL | 0
-| 1 | 2025-02-12 | 85 | 70 | 1
-| 1 | 2025-03-05 | 78 | 85 | 0
-| 2 | 2025-01-15 | 88 | NULL | 0
-| 2 | 2025-02-20 | 92 | 88 | 1
-| 2 | 2025-03-22 | 75 | 92 | 0
-
-Example 4 — RANK() to get position within a course (top students per course)
+Example 4 — Top student per course (handle ties with DENSE_RANK)
 
 ```sql
-SELECT
-    CourseName,
-    StudentID,
-    Grade,
-    RANK() OVER (PARTITION BY CourseName ORDER BY Grade DESC) AS RankInCourse
-FROM #StudentGrades
-ORDER BY CourseName, RankInCourse;
+SELECT CourseName, StudentName, Grade FROM (
+    SELECT
+        g.CourseName,
+        s.StudentName,
+        g.Grade,
+        DENSE_RANK() OVER (PARTITION BY g.CourseName ORDER BY g.Grade DESC) AS CourseRank
+    FROM #StudentGrades g
+    JOIN #Students s ON s.StudentID = g.StudentID
+) t
+WHERE CourseRank = 1
+ORDER BY CourseName;
 ```
 
-Result:
+Exercises for students (hands-on):
 
-| CourseName | StudentID | Grade | RankInCourse |
-|:-----------|----------:|------:|-------------:|
-| History | 1 | 78 | 1
-| History | 2 | 75 | 2
-| Math    | 2 | 88 | 1
-| Math    | 1 | 70 | 2
-| Science | 2 | 92 | 1
-| Science | 1 | 85 | 2
+1. Compute a 3-period rolling average for each student and list the rows where the rolling average is below 80.
+2. Find students who improved in at least two consecutive recorded courses.
+3. Using `NTILE(4)`, bucket students' grades into quartiles per course and show the counts per quartile.
+4. Write a query to find the largest jump in grade for each student between consecutive courses (use LAG and a windowed subtraction).
+5. Build a query that shows each student's average grade and rank the students overall (use AVG() OVER (PARTITION BY StudentID) and RANK()).
 
-Notes on framing and correctness:
-- `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` gives an exact running total by physical row count.
-- `RANGE` frames can behave differently when ORDER BY values repeat; prefer `ROWS` for deterministic row-based frames.
-- Use `NULL` handling when computing comparisons with LAG/LEAD.
-- For very large partitions, ensure sufficient memory and consider pre-aggregating when possible.
-
-Cleanup (drop temp table):
+Cleanup (drop temp tables):
 
 ```sql
 DROP TABLE #StudentGrades;
+DROP TABLE #Students;
 ```
 
 ---
