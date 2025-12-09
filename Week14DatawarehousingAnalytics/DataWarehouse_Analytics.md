@@ -13,38 +13,90 @@ By the end of this presentation you should be able to:
 
 ## 🔁 SQL Server: MERGE (Upsert) Statement
 
-Purpose: perform insert/update/delete in a single atomic statement — useful for incremental loads and SCD-type operations.
+Purpose: perform insert/update/delete in a single atomic statement — useful for incremental loads and SCD-type operations. Below is a concrete, runnable example that shows a target table, a staging table, the MERGE operation (with an OUTPUT clause), and the resulting target state.
 
-Basic structure:
+Example: target + staging, then MERGE
 
 ```sql
-MERGE INTO target AS T
-USING (SELECT CustomerID, Name, Address FROM staging.Customers) AS S
-ON (T.CustomerID = S.CustomerID)
-WHEN MATCHED AND (
-    ISNULL(T.Name,'') <> ISNULL(S.Name,'') OR
-    ISNULL(T.Address,'') <> ISNULL(S.Address,'')
-) THEN
-    UPDATE SET
+-- Create target table (simulates current warehouse dimension / table)
+CREATE TABLE #TargetCustomers (
+    CustomerID INT PRIMARY KEY,
+    Name VARCHAR(100),
+    Address VARCHAR(200),
+    IsStale BIT DEFAULT 0,
+    LastUpdated DATETIME2
+);
+
+-- Seed target with two customers
+INSERT INTO #TargetCustomers (CustomerID, Name, Address, LastUpdated) VALUES
+(100, 'Alice Smith', '10 Downing St', SYSUTCDATETIME()),
+(101, 'Bob Jones', '221B Baker St', SYSUTCDATETIME());
+
+-- Create staging table (simulates today's incoming data)
+CREATE TABLE #StagingCustomers (
+    CustomerID INT,
+    Name VARCHAR(100),
+    Address VARCHAR(200)
+);
+
+-- Staging contains:
+-- - Customer 100 with updated address
+-- - Customer 102 (new)
+-- Note: Customer 101 is missing from staging and will be treated as not matched by source
+INSERT INTO #StagingCustomers (CustomerID, Name, Address) VALUES
+(100, 'Alice Smith', '11 Downing St'), -- address changed
+(102, 'Charlie Brown', '742 Evergreen Terrace'); -- new customer
+
+-- Show before state
+SELECT 'BEFORE' AS Phase, * FROM #TargetCustomers ORDER BY CustomerID;
+
+-- Perform MERGE: update existing, insert new, and mark missing as stale
+MERGE INTO #TargetCustomers AS T
+USING #StagingCustomers AS S
+ON T.CustomerID = S.CustomerID
+WHEN MATCHED AND (ISNULL(T.Name,'') <> ISNULL(S.Name,'') OR ISNULL(T.Address,'') <> ISNULL(S.Address,''))
+    THEN UPDATE SET
         T.Name = S.Name,
         T.Address = S.Address,
-        T.LastUpdated = SYSUTCDATETIME()
-WHEN NOT MATCHED BY TARGET THEN
-    INSERT (CustomerID, Name, Address, CreatedDate)
-    VALUES (S.CustomerID, S.Name, S.Address, SYSUTCDATETIME())
-WHEN NOT MATCHED BY SOURCE AND T.IsStale = 1 THEN
-    DELETE; -- optional cleanup
+        T.LastUpdated = SYSUTCDATETIME(),
+        T.IsStale = 0
+WHEN NOT MATCHED BY TARGET
+    THEN INSERT (CustomerID, Name, Address, LastUpdated, IsStale)
+    VALUES (S.CustomerID, S.Name, S.Address, SYSUTCDATETIME(), 0)
+WHEN NOT MATCHED BY SOURCE
+    THEN UPDATE SET
+        IsStale = 1,
+        LastUpdated = SYSUTCDATETIME(); -- mark missing rows as stale instead of deleting
 
--- OUTPUT clause can show rows affected
-OUTPUT $action, inserted.*, deleted.*;
+-- Capture what MERGE did using a second SELECT (or use OUTPUT in production)
+SELECT 'AFTER' AS Phase, * FROM #TargetCustomers ORDER BY CustomerID;
+
+-- If you want an audit of actions use OUTPUT inside MERGE (example):
+-- MERGE INTO #TargetCustomers AS T
+-- USING #StagingCustomers AS S
+-- ON T.CustomerID = S.CustomerID
+-- WHEN MATCHED THEN UPDATE SET ...
+-- WHEN NOT MATCHED BY TARGET THEN INSERT ...
+-- WHEN NOT MATCHED BY SOURCE THEN DELETE
+-- OUTPUT $action AS MergeAction, inserted.*, deleted.*;
+
+-- Cleanup staging (for script repeatability)
+DROP TABLE #StagingCustomers;
+-- Keep #TargetCustomers for inspection or drop if you prefer
+-- DROP TABLE #TargetCustomers;
 ```
 
+Expected behavior and result explanation:
+- The MERGE will update CustomerID 100 (address changed), insert CustomerID 102 (new), and mark CustomerID 101 as stale because it wasn't in staging.
+- By marking stale rather than deleting, you keep an auditable history and avoid referential integrity gaps. Deleting is possible but often undesirable for dimensions.
+
 Best practices & gotchas:
-- Use MERGE carefully: older SQL Server versions had some edge-case concurrency bugs; test thoroughly and consider locking strategy.
+- Use MERGE carefully: older SQL Server versions had some edge-case concurrency bugs; test thoroughly and consider locking strategies or serializing critical loads.
 - Prefer deterministic matching keys (business key / natural key) rather than nullable fields.
-- Consider using OUTPUT to capture history or audit actions.
-- For heavy writes, compare MERGE vs separate UPDATE/INSERT patterns — sometimes split operations can be more predictable.
-- Ensure appropriate indexing on join key to avoid table scans.
+- Consider using the `OUTPUT` clause to capture an audit trail (inserted/deleted rows and $action) to a history/audit table.
+- For very large sets, consider batching and staging with indexed staging tables to avoid long-running locks/transactions.
+- For heavy writes, compare MERGE vs separate UPDATE/INSERT patterns — sometimes split operations are more predictable and easier to reason about.
+- Ensure appropriate indexing on join key to avoid table scans; add minimal necessary indexes on staging when needed.
 
 ---
 
@@ -131,6 +183,62 @@ The extended table looks like (ordered):
 | 3 | Grace Hopper | 2025-03-30 | History | 93
 | 4 | Katherine Johnson | 2025-02-01 | Math | 60
 | 4 | Katherine Johnson | 2025-03-01 | Science | 65
+
+Try this first (quick exercises)
+
+1) Show the average grade per course using GROUP BY. Write a query that returns CourseName and AvgGrade (rounded to 2 decimals) and show the expected results.
+
+Expected result:
+
+| CourseName | AvgGrade |
+|:-----------|---------:|
+| History    | 82.00    |
+| Math       | 79.00    |
+| Science    | 83.00    |
+
+```sql
+-- Average grade per course
+SELECT
+    CourseName,
+    ROUND(AVG(CAST(Grade AS FLOAT)), 2) AS AvgGrade
+FROM #StudentGrades
+GROUP BY CourseName
+ORDER BY CourseName;
+```
+
+2) After that, try to rank each student for each course (i.e., for a given CourseName, rank students by Grade). Attempt writing the query yourself first — later we'll show the window-function solution.
+
+Expected result:
+
+| CourseName | StudentName        | Grade | RankInCourse |
+|:-----------|:-------------------|------:|-------------:|
+| History    | Grace Hopper       | 93    | 1            |
+| History    | Ada Lovelace       | 78    | 2            |
+| History    | Alan Turing        | 75    | 3            |
+| Math       | Grace Hopper       | 95    | 1            |
+| Math       | Alan Turing        | 88    | 2            |
+| Math       | Ada Lovelace       | 82    | 3            |
+| Math       | Katherine Johnson  | 60    | 4            |
+| Science    | Alan Turing        | 92    | 1            |
+| Science    | Grace Hopper       | 90    | 2            |
+| Science    | Ada Lovelace       | 85    | 3            |
+| Science    | Katherine Johnson  | 65    | 4            |
+
+```sql
+WITH BestGrades AS (
+    SELECT g.StudentID, s.StudentName, g.CourseName, MAX(g.Grade) AS Grade
+    FROM #StudentGrades g
+    JOIN #Students s ON s.StudentID = g.StudentID
+    GROUP BY g.StudentID, s.StudentName, g.CourseName
+)
+SELECT
+    CourseName,
+    StudentName,
+    Grade,
+    RANK() OVER (PARTITION BY CourseName ORDER BY Grade DESC) AS RankInCourse
+FROM BestGrades
+ORDER BY CourseName, RankInCourse;
+```
 
 Example 1 — ROW_NUMBER() with student names
 
